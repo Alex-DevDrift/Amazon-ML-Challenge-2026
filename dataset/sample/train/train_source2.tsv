@@ -1,0 +1,19 @@
+entity_id	business_name	business_address	country
+S2-00001	Apple Inc.	1 Infinite Loop, Cupertino, CA 95014	US
+S2-00002	MICORSOFT CORPORATION Trading	One Microsoft Way, Redmond, WA 98052	US
+S2-00003	The Amazon.com Services LLC	WA 98109, Seattle, 410 Terry Ave N	US
+S2-00004	The Amazon.com Services LLC Trading	410 Terry Ave N, Seattle, WA 98109 (Opposite Bank)	US
+S2-00005	Meta Platforms Inc.	Near 1 Hacker Way,  Menlo Park,  CA 94025	US
+S2-00006	Meta Platforms Inc. Trading	Near 1 Hacker Way,  Menlo Park,  CA 94025	US
+S2-00007	Target Corporation Store #102	1000 Nicollet Mall, Minneapolis, MN 55403 (Opposite Bank)	US
+S2-00008	Starbucks Coffee Company Trading	2401 Utah Ave S,  WA 98134	US
+S2-00009	Tata Consultancy Services Ltd	Nirmal Building, 9th Fl, Nariman Point, Mumbai 400021	India
+S2-00010	infosys limited Trading	Electronics City,  Bengaluru 560100	India
+S2-00011	Reliance Industries Limited	Maker Chambers IV,  Mumbai 400021	India
+S2-00012	reliance industries limited Trading	Maker Chambers IV, 3rd Floor, 222 Nariman Point, Mumbai 110001 (Opposite Bank)	India
+S2-00013	HDFC aBnk Ltd Store #102	HDFC Bank House, Senapati Bapat Marg, Lower Parel, Mumbai 400013	India
+S2-00014	The HDFC Bank Ltd	HDFC Bank House, Senapati Bapat Marg, Lower Parel, Mumbai	India
+S2-00015	State Bank of India	State Bank Bhavan, Madame Cama Rd, Nariman Point, Mumbai 400021	India
+S2-00016	Bharti Airtel Limited	Bharti Crescent,  New Delhi 110070	India
+S2-00017	The Mahindra & Mahindra Ltd	Mumbai 400039, Apollo Bunder, Gateway Building	India
+S2-00018	Mahindra & Mahindra Ltd	Gateway Building, Apollo Bunder, Mumbai 400039	India
