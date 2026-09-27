@@ -112,94 +112,124 @@ class EntityBlocker:
         target_df: pd.DataFrame,
     ) -> Dict[str, List[str]]:
         """
-        Blocks records within the same country partition using multi-index strategy.
+        Blocks records within the same country partition using multi-index strategy with chunking.
+        Scales cleanly to 1M+ entities without memory spikes.
         """
-        target_records = target_df.to_dict(orient="records")
-        target_id_to_record = {r["entity_id"]: r for r in target_records}
+        target_ids = target_df["entity_id"].values
+        target_names = target_df["norm_name"].values
+        target_addrs = target_df["norm_addr"].values
+        target_digits_list = target_df["addr_digits"].values
 
-        # 1. Build Inverted Index on Name Tokens
-        token_to_targets = collections.defaultdict(set)
-        digit_to_targets = collections.defaultdict(set)
+        num_targets = len(target_ids)
+        target_id_to_idx = {target_ids[i]: i for i in range(num_targets)}
 
-        for r in target_records:
-            t_id = r["entity_id"]
-            tokens = tokenize_name_for_blocking(r["norm_name"])
+        # 1. Build Inverted Index on Name Tokens (skipping hyper-frequent tokens)
+        token_to_targets = collections.defaultdict(list)
+        digit_to_targets = collections.defaultdict(list)
+
+        for i in range(num_targets):
+            t_id = target_ids[i]
+            tokens = tokenize_name_for_blocking(target_names[i])
             for t in tokens:
-                token_to_targets[t].add(t_id)
+                token_to_targets[t].append(t_id)
 
-            for d in r["addr_digits"]:
-                if len(d) >= 4:  # Postal code or large street number
-                    digit_to_targets[d].add(t_id)
+            for d in target_digits_list[i]:
+                if len(d) >= 4:
+                    digit_to_targets[d].append(t_id)
 
-        # 2. TF-IDF Cosine Retrieval
+        # Cap token index to prune overly common tokens (> 2500 matches)
+        token_to_targets = {
+            k: set(v) for k, v in token_to_targets.items() if len(v) <= 2500
+        }
+        digit_to_targets = {
+            k: set(v) for k, v in digit_to_targets.items() if len(v) <= 1500
+        }
+
+        # 2. Sub-word TF-IDF Cosine Retrieval
         tfidf = TfidfVectorizer(
             analyzer="char_wb",
             ngram_range=(3, 4),
-            min_df=1,
-            max_features=40000,
+            min_df=2 if num_targets > 1000 else 1,
+            max_features=35000,
         )
+
         combined_texts_target = [
-            f"{r['norm_name']} {r['norm_addr']}" for r in target_records
+            f"{target_names[i]} {target_addrs[i]}" for i in range(num_targets)
         ]
-        combined_texts_s1 = [
-            f"{r['norm_name']} {r['norm_addr']}" for r in s1_df.to_dict(orient="records")
-        ]
-
         tfidf_target_mat = tfidf.fit_transform(combined_texts_target)
-        tfidf_s1_mat = tfidf.transform(combined_texts_s1)
 
-        # Sparse matrix multiplication for fast cosine similarity
-        cosine_sim = tfidf_s1_mat.dot(tfidf_target_mat.T)
+        s1_ids = s1_df["entity_id"].values
+        s1_names = s1_df["norm_name"].values
+        s1_addrs = s1_df["norm_addr"].values
+        s1_digits_list = s1_df["addr_digits"].values
+        num_s1 = len(s1_ids)
 
         results: Dict[str, List[str]] = {}
-        target_ids = [r["entity_id"] for r in target_records]
+        chunk_size = 5000
 
-        for idx, s1_row in enumerate(s1_df.to_dict(orient="records")):
-            s1_id = s1_row["entity_id"]
-            s1_name = s1_row["norm_name"]
-            s1_addr = s1_row["norm_addr"]
-            s1_tokens = tokenize_name_for_blocking(s1_name)
-            s1_digits = s1_row["addr_digits"]
+        for chunk_start in range(0, num_s1, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, num_s1)
+            chunk_texts = [
+                f"{s1_names[i]} {s1_addrs[i]}" for i in range(chunk_start, chunk_end)
+            ]
+            tfidf_s1_chunk = tfidf.transform(chunk_texts)
 
-            candidate_pool = set()
+            # Chunked cosine similarity
+            chunk_sim = tfidf_s1_chunk.dot(tfidf_target_mat.T)
 
-            # (A) Inverted Token Matches
-            for t in s1_tokens:
-                if t in token_to_targets:
-                    candidate_pool.update(token_to_targets[t])
+            for i_local, i_global in enumerate(range(chunk_start, chunk_end)):
+                s1_id = s1_ids[i_global]
+                s1_name = s1_names[i_global]
+                s1_addr = s1_addrs[i_global]
+                s1_tokens = tokenize_name_for_blocking(s1_name)
+                s1_digits = s1_digits_list[i_global]
 
-            # (B) Digit / Postal Code Co-occurrence
-            for d in s1_digits:
-                if len(d) >= 4 and d in digit_to_targets:
-                    candidate_pool.update(digit_to_targets[d])
+                candidate_pool = set()
 
-            # (C) TF-IDF Top-K Cosine candidates
-            row_sims = cosine_sim.getrow(idx).toarray().ravel()
-            if len(row_sims) > 0:
-                top_k_indices = np.argsort(row_sims)[-self.max_candidates :]
-                for target_idx in top_k_indices:
-                    if row_sims[target_idx] > 0.05:
-                        candidate_pool.add(target_ids[target_idx])
+                # (A) Inverted Token Matches
+                for t in s1_tokens:
+                    if t in token_to_targets:
+                        candidate_pool.update(token_to_targets[t])
 
-            # Lexical scoring and rank-filtering
-            scored_candidates = []
-            for c_id in candidate_pool:
-                cand_rec = target_id_to_record[c_id]
-                c_name = cand_rec["norm_name"]
-                c_addr = cand_rec["norm_addr"]
+                # (B) Digit / Postal Code Matches
+                for d in s1_digits:
+                    if len(d) >= 4 and d in digit_to_targets:
+                        candidate_pool.update(digit_to_targets[d])
 
-                # Fast token sort ratio
-                name_sim = fuzz.token_sort_ratio(s1_name, c_name)
-                addr_sim = fuzz.token_set_ratio(s1_addr, c_addr)
-                combo_score = 0.65 * name_sim + 0.35 * addr_sim
+                # (C) TF-IDF Top-K Cosine
+                row = chunk_sim.getrow(i_local)
+                if row.nnz > 0:
+                    col_indices = row.indices
+                    data = row.data
+                    if len(data) > self.max_candidates:
+                        top_subset = np.argsort(data)[-self.max_candidates :]
+                        for idx_in_row in top_subset:
+                            if data[idx_in_row] > 0.08:
+                                candidate_pool.add(target_ids[col_indices[idx_in_row]])
+                    else:
+                        for col_idx, val in zip(col_indices, data):
+                            if val > 0.08:
+                                candidate_pool.add(target_ids[col_idx])
 
-                if combo_score >= self.min_lexical_score:
-                    scored_candidates.append((c_id, combo_score))
+                # Lexical scoring and rank-filtering
+                scored_candidates = []
+                for c_id in candidate_pool:
+                    if c_id not in target_id_to_idx:
+                        continue
+                    t_idx = target_id_to_idx[c_id]
+                    c_name = target_names[t_idx]
+                    c_addr = target_addrs[t_idx]
 
-            # Sort descending and enforce budget cap
-            scored_candidates.sort(key=lambda x: x[1], reverse=True)
-            top_candidates = [cid for cid, _ in scored_candidates[: self.max_candidates]]
-            results[s1_id] = top_candidates
+                    name_sim = fuzz.token_sort_ratio(s1_name, c_name)
+                    addr_sim = fuzz.token_set_ratio(s1_addr, c_addr)
+                    combo_score = 0.65 * name_sim + 0.35 * addr_sim
+
+                    if combo_score >= self.min_lexical_score:
+                        scored_candidates.append((c_id, combo_score))
+
+                scored_candidates.sort(key=lambda x: x[1], reverse=True)
+                top_candidates = [cid for cid, _ in scored_candidates[: self.max_candidates]]
+                results[s1_id] = top_candidates
 
         return results
 

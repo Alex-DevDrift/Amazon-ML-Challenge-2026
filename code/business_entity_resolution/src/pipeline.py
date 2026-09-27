@@ -247,29 +247,45 @@ class EntityResolutionPipeline:
         export_candidate_pairs_tsv(test_candidates, cand_pairs_path)
         print(f"Exported candidate pairs to {cand_pairs_path}")
 
-        # 2. Feature Extraction on Test Candidates
+        # 2. Feature Extraction & Scoring on Test Candidates in Batches
         target_df_test = pd.concat([df_s2_test, df_s3_test], ignore_index=True)
-        target_dict_test = {r["entity_id"]: r for r in target_df_test.to_dict(orient="records")}
-        s1_dict_test = {r["entity_id"]: r for r in df_s1_test.to_dict(orient="records")}
+        target_dict_test = {
+            r["entity_id"]: r for r in target_df_test.to_dict(orient="records")
+        }
 
-        df_feats_test = build_feature_dataframe(
-            s1_dict_test, target_dict_test, test_candidates, FEATURE_COLUMNS
-        )
+        s1_records_test = df_s1_test.to_dict(orient="records")
+        s1_dict_test = {r["entity_id"]: r for r in s1_records_test}
 
-        # 3. Model Scoring
-        print(f"Scoring {len(df_feats_test)} test candidate pairs...")
         final_matches: Dict[str, List[str]] = {
             eid: [] for eid in df_s1_test["entity_id"].values
         }
 
-        if len(df_feats_test) > 0:
-            test_probs = self.model.predict_proba(df_feats_test)
-            for idx, r in df_feats_test.iterrows():
-                prob = test_probs[idx]
-                if prob >= self.best_threshold:
-                    s1_id = r["source1_entity_id"]
-                    cand_id = r["candidate_entity_id"]
-                    final_matches[s1_id].append(cand_id)
+        total_s1 = len(s1_records_test)
+        batch_size = 25000
+        print(f"Scoring candidates across {total_s1} Source 1 entities in batches of {batch_size}...")
+
+        for b_start in range(0, total_s1, batch_size):
+            b_end = min(b_start + batch_size, total_s1)
+            batch_s1_ids = [s1_records_test[i]["entity_id"] for i in range(b_start, b_end)]
+            batch_candidates = {eid: test_candidates.get(eid, []) for eid in batch_s1_ids}
+
+            # Filter only entities that actually have candidates
+            active_cands = {k: v for k, v in batch_candidates.items() if len(v) > 0}
+            if active_cands:
+                df_batch_feats = build_feature_dataframe(
+                    s1_dict_test, target_dict_test, active_cands, FEATURE_COLUMNS
+                )
+                if len(df_batch_feats) > 0:
+                    probs = self.model.predict_proba(df_batch_feats)
+                    for idx_row, r in df_batch_feats.iterrows():
+                        prob = probs[idx_row]
+                        if prob >= self.best_threshold:
+                            s1_id = r["source1_entity_id"]
+                            cand_id = r["candidate_entity_id"]
+                            final_matches[s1_id].append(cand_id)
+
+            if total_s1 > 1000:
+                print(f"  Processed {b_end}/{total_s1} entities ({b_end/total_s1*100:.1f}%)...")
 
         # Guarantee subset condition: final matches must be a subset of candidate pairs
         for s1_id, matches in final_matches.items():
