@@ -35,9 +35,12 @@ ENV/
 env.bak/
 venv.bak/
 
-# Trained model checkpoints & large cache
-code/business_entity_resolution/models/*.pkl
-*.pkl
+# Large datasets & output TSVs
+dataset/train/
+dataset/test/
+output/*.tsv
+*.zip
+*.tar.gz
 
 # OS files
 .DS_Store
