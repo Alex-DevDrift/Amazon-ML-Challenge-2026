@@ -41,6 +41,9 @@ dataset/test/
 output/*.tsv
 *.zip
 *.tar.gz
+*.pkl
+*.txt
+code/business_entity_resolution/models/
 
 # OS files
 .DS_Store
